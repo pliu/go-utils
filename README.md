@@ -39,5 +39,3 @@ mine := mgr.GetDeepCopy() // fully isolated copy (safe to mutate)
   custom rules go in a `Validate() error` method or `WithValidator`.
 - Snapshots are stable: a reload swaps in a new instance, so values already
   returned by `Get`/`GetDeepCopy` never change under the caller.
-
-See [DESIGN.md](./DESIGN.md) for the full design.
