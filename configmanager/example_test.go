@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/pliu/utils/configmanager"
+	"github.com/pliu/go-utils/configmanager"
 )
 
 type AppConfig struct {

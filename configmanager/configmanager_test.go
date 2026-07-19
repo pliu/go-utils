@@ -97,7 +97,7 @@ func TestInitialLoadFailures(t *testing.T) {
 				t.Fatalf("New succeeded, want error containing %q", tc.wantSub)
 			}
 			matched := false
-			for sub := range strings.SplitSeq(tc.wantSub, "|") {
+			for _, sub := range strings.Split(tc.wantSub, "|") {
 				if strings.Contains(err.Error(), sub) {
 					matched = true
 				}

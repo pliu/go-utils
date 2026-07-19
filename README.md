@@ -1,4 +1,4 @@
-# utils
+# go-utils
 
 Reusable Go utilities. Each tool lives in its own package so importers only
 pull in what they use.
@@ -10,7 +10,7 @@ pull in what they use.
 ## configmanager
 
 ```go
-import "github.com/pliu/utils/configmanager"
+import "github.com/pliu/go-utils/configmanager"
 
 type AppConfig struct {
     ListenAddr string `json:"listen_addr" validate:"required"`
