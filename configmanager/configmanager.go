@@ -56,7 +56,6 @@ func New[T any](path string, opts ...Option[T]) (*Manager[T], error) {
 	loadStarted := time.Now()
 	res, err := load(path, o.validator)
 	if err != nil {
-		m.metrics.lastReloadSuccessful.Set(0)
 		return nil, fmt.Errorf("configmanager: initial load of %s: %w", path, err)
 	}
 	m.metrics.loadDuration.Observe(time.Since(loadStarted).Seconds())
@@ -119,6 +118,9 @@ func (m *Manager[T]) Err() error {
 // Close stops the background poller. It is idempotent and safe to call
 // concurrently. Get and GetDeepCopy remain usable after Close; the config
 // simply no longer reloads.
+//
+// Close must not be called from an OnSwap or OnError callback: it waits for
+// the poller goroutine that runs those callbacks, so it would deadlock.
 func (m *Manager[T]) Close() {
 	m.closeOnce.Do(func() {
 		m.cancel()
@@ -132,10 +134,10 @@ func (m *Manager[T]) setErr(err error) {
 	m.errMu.Unlock()
 	if err == nil {
 		m.metrics.lastReloadSuccessful.Set(1)
-	} else {
-		m.metrics.lastReloadSuccessful.Set(0)
+		return
 	}
-	if err != nil && m.opts.onError != nil {
+	m.metrics.lastReloadSuccessful.Set(0)
+	if m.opts.onError != nil {
 		m.opts.onError(err)
 	}
 }

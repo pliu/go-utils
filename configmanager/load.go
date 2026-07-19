@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"reflect"
 	"time"
@@ -34,15 +35,17 @@ type loadResult[T any] struct {
 // background reload: read the file, decode it into a fresh T, and validate.
 func load[T any](path string, custom func(*T) error) (loadResult[T], error) {
 	var res loadResult[T]
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return res, err
-	}
-	// Stat after the read: if the file changes between the two, the recorded
-	// mtime/size are stale and the poller simply re-reads on the next tick.
+	// Stat before the read: if the file changes between the two, the recorded
+	// mtime/size are stale in the safe direction — the poller's next stat
+	// differs and triggers a re-read. The reverse order could record the new
+	// file's stat against the old file's content, suppressing the re-read.
 	if fi, err := os.Stat(path); err == nil {
 		res.modTime = fi.ModTime()
 		res.size = fi.Size()
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return res, err
 	}
 
 	cfg := new(T)
@@ -66,12 +69,19 @@ func decode(data []byte, v any) error {
 	if err := dec.Decode(v); err != nil {
 		return err
 	}
-	if dec.More() {
-		return errors.New("trailing data after top-level JSON value")
-	}
 	// Runs after Decode so syntax errors surface with the standard
 	// encoding/json messages; by this point the data is known-valid JSON.
-	return checkDuplicateKeys(data)
+	walk := json.NewDecoder(bytes.NewReader(data))
+	if err := checkDupValue(walk); err != nil {
+		return err
+	}
+	// checkDupValue consumed exactly one top-level value, so anything left is
+	// trailing data. (dec.More cannot detect this: it reports false for a
+	// trailing '}' or ']'.)
+	if _, err := walk.Token(); err != io.EOF {
+		return errors.New("trailing data after top-level JSON value")
+	}
+	return nil
 }
 
 func validate[T any](cfg *T, custom func(*T) error) error {
@@ -95,16 +105,11 @@ func validate[T any](cfg *T, custom func(*T) error) error {
 	return nil
 }
 
-// checkDuplicateKeys walks the full JSON token stream and rejects objects
-// that define the same key more than once at the same nesting level —
+// checkDupValue consumes one JSON value from the token stream and rejects
+// objects that define the same key more than once at the same nesting level —
 // including inside objects the target struct does not map. encoding/json
 // silently lets the last duplicate win, which hides what the author of the
 // file actually intended.
-func checkDuplicateKeys(data []byte) error {
-	dec := json.NewDecoder(bytes.NewReader(data))
-	return checkDupValue(dec)
-}
-
 func checkDupValue(dec *json.Decoder) error {
 	tok, err := dec.Token()
 	if err != nil {

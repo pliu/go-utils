@@ -87,6 +87,8 @@ func TestInitialLoadFailures(t *testing.T) {
 		{"duplicate key", `{"name": "svc", "port": 1, "name": "other"}`, "duplicate key"},
 		{"duplicate key in nested object", `{"name": "svc", "port": 1, "nested": {"value": 1, "value": 2}}`, "duplicate key"},
 		{"trailing data", `{"name": "svc", "port": 1} {"more": true}`, "trailing data"},
+		{"trailing close brace", `{"name": "svc", "port": 1}}`, "trailing data"},
+		{"trailing close bracket", `{"name": "svc", "port": 1} ]`, "trailing data"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

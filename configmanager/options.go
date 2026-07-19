@@ -41,14 +41,20 @@ func WithValidator[T any](fn func(*T) error) Option[T] {
 // WithOnSwap registers a callback invoked after each successful hot reload,
 // with the previous and newly serving configs. Both are shared, read-only
 // snapshots (see Get) and must not be mutated. The callback runs on the
-// poller goroutine; a slow callback delays subsequent polls.
+// poller goroutine; a slow callback delays subsequent polls, and calling
+// Close from it deadlocks.
 func WithOnSwap[T any](fn func(old, new *T)) Option[T] {
 	return func(o *options[T]) { o.onSwap = fn }
 }
 
 // WithOnError registers a callback invoked whenever a reload attempt fails
 // (unreadable file, bad JSON, validation failure). The previously serving
-// config remains in effect. The callback runs on the poller goroutine.
+// config remains in effect. The callback runs on the poller goroutine;
+// calling Close from it deadlocks.
+//
+// A file whose content decodes or validates badly fires the callback once
+// per change; a file that cannot be stat'ed (e.g. deleted) fires it on
+// every poll tick until the file is readable again.
 func WithOnError[T any](fn func(error)) Option[T] {
 	return func(o *options[T]) { o.onError = fn }
 }
