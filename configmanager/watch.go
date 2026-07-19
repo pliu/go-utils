@@ -40,11 +40,13 @@ func (m *Manager[T]) poll() {
 	m.lastMod = fi.ModTime()
 	m.lastSize = fi.Size()
 
+	loadStarted := time.Now()
 	res, err := load(m.path, m.opts.validator)
 	if err != nil {
 		m.setErr(fmt.Errorf("configmanager: reload of %s: %w", m.path, err))
 		return
 	}
+	m.metrics.loadDuration.Observe(time.Since(loadStarted).Seconds())
 	if res.hash == m.lastHash {
 		// Content identical to the last good load (e.g. touched, or reverted
 		// after a bad edit): nothing to swap, and the file is healthy again.

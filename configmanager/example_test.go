@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"github.com/pliu/go-utils/configmanager"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 type AppConfig struct {
@@ -33,6 +34,10 @@ func Example() {
 		log.Fatal(err) // never start on a bad config
 	}
 	defer mgr.Close()
+
+	// Metrics are opt-in and can be added to any Prometheus registry.
+	registry := prometheus.NewRegistry()
+	registry.MustRegister(mgr.PrometheusCollector())
 
 	// Shared read-only snapshot: cheap, must not be mutated.
 	cfg := mgr.Get()

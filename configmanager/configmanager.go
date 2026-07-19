@@ -33,6 +33,7 @@ type Manager[T any] struct {
 
 	errMu   sync.Mutex
 	lastErr error
+	metrics *prometheusMetrics
 
 	cancel    context.CancelFunc
 	done      chan struct{}
@@ -50,12 +51,16 @@ func New[T any](path string, opts ...Option[T]) (*Manager[T], error) {
 	for _, opt := range opts {
 		opt(&o)
 	}
-	m := &Manager[T]{path: path, opts: o}
+	m := &Manager[T]{path: path, opts: o, metrics: newPrometheusMetrics()}
 
+	loadStarted := time.Now()
 	res, err := load(path, o.validator)
 	if err != nil {
+		m.metrics.lastReloadSuccessful.Set(0)
 		return nil, fmt.Errorf("configmanager: initial load of %s: %w", path, err)
 	}
+	m.metrics.loadDuration.Observe(time.Since(loadStarted).Seconds())
+	m.metrics.lastReloadSuccessful.Set(1)
 	m.serving.Store(res.cfg)
 	m.lastHash = res.hash
 	m.lastMod = res.modTime
@@ -125,6 +130,11 @@ func (m *Manager[T]) setErr(err error) {
 	m.errMu.Lock()
 	m.lastErr = err
 	m.errMu.Unlock()
+	if err == nil {
+		m.metrics.lastReloadSuccessful.Set(1)
+	} else {
+		m.metrics.lastReloadSuccessful.Set(0)
+	}
 	if err != nil && m.opts.onError != nil {
 		m.opts.onError(err)
 	}

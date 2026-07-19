@@ -39,3 +39,32 @@ mine := mgr.GetDeepCopy() // fully isolated copy (safe to mutate)
   custom rules go in a `Validate() error` method or `WithValidator`.
 - Snapshots are stable: a reload swaps in a new instance, so values already
   returned by `Get`/`GetDeepCopy` never change under the caller.
+
+### Prometheus metrics
+
+Each manager exposes an opt-in collector. It is never registered globally and
+does not start a metrics server, so it can be added to an application's own
+registry:
+
+```go
+registry := prometheus.NewRegistry()
+registry.MustRegister(mgr.PrometheusCollector())
+
+metricsHandler := promhttp.HandlerFor(registry, promhttp.HandlerOpts{})
+```
+
+| Metric | Type | Description |
+|---|---|---|
+| `configmanager_load_duration_seconds` | Histogram | Duration of successful initial loads and reloads, including valid unchanged content. Failed loads are excluded. |
+| `configmanager_last_reload_successful` | Gauge | `1` when the most recent load/reload succeeded, otherwise `0`; initialized to `1` after `New` succeeds. |
+
+When registering collectors from multiple managers in the same registry, add
+a const label to distinguish them:
+
+```go
+registerer := prometheus.WrapRegistererWith(
+    prometheus.Labels{"config": "application"},
+    registry,
+)
+registerer.MustRegister(mgr.PrometheusCollector())
+```
