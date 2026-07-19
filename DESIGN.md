@@ -19,13 +19,16 @@ A reusable Go module, `utils`, importable by other projects. Its first package i
   - **serving** — the validated config currently in effect; what callers receive.
   - **shadow** — the staging slot. Each time the file changes, the new contents are deserialized and validated here first.
 - A background goroutine watches the file. On change, the file is decoded into shadow and validated. Only if validation passes is shadow atomically promoted to serving. On failure the previous serving config stays in effect and the error is surfaced through an observability hook.
-- `Get()` returns a **deep copy** of serving, so a later swap can never change data a caller already holds.
+- Two read calls let the caller pick the trade-off (decided in PR review):
+  - `Get()` returns a shared, read-only snapshot (`*T`) — no copy cost. Reloads swap in a *new* instance rather than mutating the served one, so a held snapshot never changes under the caller; it must simply not be mutated.
+  - `GetDeepCopy()` returns a fully isolated **deep copy** (`T`) that is safe to mutate.
 
 Validation semantics, per the requirements:
 
 - **Unknown fields in the file are tolerated** (the struct simply doesn't map them).
 - **Type mismatches on defined fields fail** (e.g. a string in the file where the struct declares an int).
 - **Missing required fields fail** (see "Validation" below for how "required" is declared).
+- **Duplicate JSON keys fail** (decided in PR review): `encoding/json` silently lets the last duplicate win, which hides what the file's author intended, so a token-stream scan rejects any object defining the same key twice.
 
 ## Architecture
 
@@ -44,12 +47,12 @@ Validation semantics, per the requirements:
 │        ▼                            │   serving    │    │
 │   config.json                       │(atomic.Pointer)   │
 │                                     └──────┬───────┘    │
-│                                            │ deep copy  │
-│                              Get() ────────┘──▶ caller  │
+│               Get() ── shared snapshot ────┤            │
+│        GetDeepCopy() ── deep copy ─────────┘──▶ caller  │
 └─────────────────────────────────────────────────────────┘
 ```
 
-**1. Loader (`load.go`)** — pure function: read file bytes → decode JSON into a fresh `T` → validate. Used identically by the initial load and by every reload, so the two paths cannot drift. Decoding uses `encoding/json` with `json.Decoder`, which by default ignores unknown fields (required behavior) and errors on type mismatches (required behavior).
+**1. Loader (`load.go`)** — pure function: read file bytes → decode JSON into a fresh `T` → validate. Used identically by the initial load and by every reload, so the two paths cannot drift. Decoding uses `encoding/json` with `json.Decoder`, which by default ignores unknown fields (required behavior) and errors on type mismatches (required behavior). After decoding, a token-stream walk over the same bytes rejects duplicate keys at any nesting level (including inside unknown fields — the file is ambiguous either way), and trailing data after the top-level value is rejected via `dec.More()`.
 
 **2. Validation (`load.go`)** — two layers, both optional but at least the first is recommended:
    - **Struct-tag validation** for "required fields": fields tagged `` `validate:"required"` `` must be present/non-zero. Implemented with `github.com/go-playground/validator/v10`, the de-facto standard, rather than hand-rolled reflection.
@@ -62,12 +65,14 @@ Validation semantics, per the requirements:
    - Config files are small and change rarely; a stat every few seconds is negligible.
    - The poller interface is internal, so an fsnotify-based watcher can be added later behind an option without breaking the API.
 
-**5. Read path — `Get()`** — returns `T` (a value) produced by **deep-copying** the serving instance. A shallow struct copy is not enough: if `T` contains slices, maps, or pointers, a shallow copy would share backing memory with a config that could be replaced (or worse, mutated by another caller). Deep copy is implemented by JSON round-trip (`json.Marshal` the serving instance → `json.Unmarshal` into a fresh `T`). Rationale: it is guaranteed correct for any type that round-trips through JSON — which `T` must, since it's loaded from JSON — with no reflection code to maintain. Config structs are small and `Get()` is expected to be called at request scope, not in per-item inner loops; if profiling ever shows otherwise, callers can cache the returned copy, or a `WithCopier(func(*T) T)` option can be added later.
+**5. Read path — `Get()` and `GetDeepCopy()`** — two calls so the caller chooses the trade-off (per PR review):
+   - `Get() *T` — an atomic pointer load, no copying. The returned snapshot is shared and read-only: callers must not mutate it. It is nonetheless stable — a reload swaps the serving pointer to a brand-new instance and never mutates a published one, so a held snapshot keeps its values forever.
+   - `GetDeepCopy() T` — a fully isolated copy that is safe to mutate. A shallow struct copy would not be enough: slices, maps, and pointers inside `T` would share backing memory with other callers. The deep copy is implemented by JSON round-trip (`json.Marshal` the serving instance → `json.Unmarshal` into a fresh `T`): guaranteed correct for any type that round-trips through JSON — which `T` must, since it's loaded from JSON — with no reflection code to maintain.
 
 **6. Lifecycle & observability (`manager.go`, `options.go`)**
    - `New` fails (returns an error, no manager) if the initial load or validation fails — a service never starts on a bad config.
    - `Close()` stops the poller goroutine (internally: context cancellation).
-   - `WithOnSwap(func(old, new T))` — called after each successful promotion (logging, metric bumps, re-deriving cached values).
+   - `WithOnSwap(func(old, new *T))` — called after each successful promotion (logging, metric bumps, re-deriving cached values); the arguments are shared snapshots with the same must-not-mutate contract as `Get`.
    - `WithOnError(func(error))` — called when a reload fails (unreadable file, bad JSON, validation failure). The failure never affects serving; this hook exists so failures are visible instead of silent.
    - `Err()` returns the most recent reload error (nil if the last reload succeeded), for health checks.
 
@@ -75,7 +80,7 @@ Validation semantics, per the requirements:
 
 **Initial load (synchronous, in `New`):**
 1. Read file at `path`. Missing/unreadable file → error, `New` fails.
-2. Decode JSON into fresh `T`. Syntax error or type mismatch → error, `New` fails. Unknown fields ignored.
+2. Decode JSON into fresh `T`. Syntax error, type mismatch, duplicate key, or trailing data → error, `New` fails. Unknown fields ignored.
 3. Validate (tags, then custom hook). Failure → error, `New` fails.
 4. Store instance in serving pointer; record content hash; start poller.
 
@@ -87,7 +92,8 @@ Validation semantics, per the requirements:
 5. On success: atomically swap shadow into serving, update hash, clear `Err()`, fire `OnSwap`.
 
 **Read:**
-1. Caller invokes `Get()` → atomic load of serving pointer → deep copy → returned by value.
+1. `Get()` → atomic load of the serving pointer → returned as a shared read-only snapshot.
+2. `GetDeepCopy()` → atomic load → JSON round-trip deep copy → returned by value.
 
 ### Sketch of the public API
 
@@ -96,13 +102,14 @@ type Manager[T any] struct { /* unexported */ }
 
 func New[T any](path string, opts ...Option[T]) (*Manager[T], error)
 
-func (m *Manager[T]) Get() T        // deep copy of the serving config
-func (m *Manager[T]) Err() error    // most recent reload error, nil if healthy
-func (m *Manager[T]) Close()        // stop watching
+func (m *Manager[T]) Get() *T        // shared read-only snapshot of the serving config
+func (m *Manager[T]) GetDeepCopy() T // isolated deep copy, safe to mutate
+func (m *Manager[T]) Err() error     // most recent reload error, nil if healthy
+func (m *Manager[T]) Close()         // stop watching
 
 func WithPollInterval[T any](d time.Duration) Option[T]
 func WithValidator[T any](fn func(*T) error) Option[T]
-func WithOnSwap[T any](fn func(old, new T)) Option[T]
+func WithOnSwap[T any](fn func(old, new *T)) Option[T]
 func WithOnError[T any](fn func(error)) Option[T]
 ```
 
@@ -111,11 +118,11 @@ func WithOnError[T any](fn func(error)) Option[T]
 | Choice | Rationale |
 |---|---|
 | Go generics (`Manager[T]`) | Compile-time type safety; no `interface{}` casts at call sites. Requires Go ≥ 1.18; we target a recent stable Go (1.22+). |
-| `encoding/json` (stdlib) | Default behavior matches the spec exactly: unknown fields ignored, type mismatches error. No dependency. |
+| `encoding/json` (stdlib) | Default behavior matches the spec: unknown fields ignored, type mismatches error. A small token-stream scan adds duplicate-key rejection on top. No dependency. |
 | `go-playground/validator` | Declarative `required` (and richer) rules via struct tags; the community standard. The only third-party dependency. |
 | `atomic.Pointer[T]` for serving | Lock-free reads, atomic swap; simplest correct primitive for read-mostly data. |
 | Polling + stat gate + content hash | Robust against atomic renames/symlink swaps where fsnotify is not; zero deps; trivial to reason about. |
-| Deep copy via JSON round-trip | Guaranteed correct for JSON-loaded types; no bespoke reflection copier to maintain. |
+| `Get()`/`GetDeepCopy()` split | Caller picks: zero-cost shared snapshot vs. isolated mutable copy (JSON round-trip — guaranteed correct for JSON-loaded types; no bespoke reflection copier to maintain). |
 
 ## Proposed project layout
 
@@ -143,7 +150,7 @@ utils/
 
 Each milestone is a small, independently reviewable PR that leaves the module in a working state.
 
-1. **M1 — Module scaffolding + synchronous core.** `go.mod`, CI (build, `go vet`, `go test`, lint). Implement `load.go` and `New`/`Get`/`Close` with no watching yet: initial load, decode, tag + custom validation, deep-copy `Get`. Tests: valid file, missing file, malformed JSON, unknown fields tolerated, type mismatch rejected, missing required field rejected, `Get` copy isolation (mutating the returned value and its nested slices/maps doesn't affect subsequent `Get`s).
+1. **M1 — Module scaffolding + synchronous core.** `go.mod`, CI (build, `go vet`, `go test`, lint). Implement `load.go` and `New`/`Get`/`GetDeepCopy`/`Close` with no watching yet: initial load, decode (incl. duplicate-key rejection), tag + custom validation. Tests: valid file, missing file, malformed JSON, unknown fields tolerated, type mismatch rejected, missing required field rejected, duplicate keys rejected, `GetDeepCopy` isolation (mutating the returned value and its nested slices/maps doesn't affect subsequent calls or the serving config).
 2. **M2 — Hot reload.** Poller with stat gate + content hash, shadow decode/validate, atomic promotion, `Err()`. Tests: file change picked up, invalid change keeps old config serving and sets `Err()`, recovery after a bad write, atomic-rename and symlink-swap writes detected, no reload when only mtime changes, concurrent `Get` during swaps under `-race`.
 3. **M3 — Options & observability.** `WithPollInterval`, `WithValidator`, `WithOnSwap`, `WithOnError`; callback ordering/panic-safety tests.
 4. **M4 — Docs & release.** README with quick-start, `example_test.go`, full godoc comments, tag `v0.1.0`.
@@ -155,8 +162,7 @@ Answers to these would most change the design. Each has an assumed answer so imp
 1. **How should "required fields" be declared?** The spec says validation must fail on missing required fields, but plain Go structs don't express requiredness — a missing JSON field just leaves the zero value.
    *Assumed:* fields tagged `` `validate:"required"` `` (go-playground/validator), plus an optional custom validation hook for cross-field rules. If a zero-dependency module is preferred, we'd instead rely solely on the custom hook and implement a small reflection-based `required` tag check ourselves.
 
-2. **Is per-call deep-copy cost acceptable for `Get()`?** JSON round-trip copying is microseconds for typical config structs, but it's per call. The alternative — returning a shared `*T` and documenting "don't mutate" — is faster but violates the isolation requirement.
-   *Assumed:* yes, deep copy per call; callers on hot paths hold onto their copy for the scope of a request. A `WithCopier` escape hatch can be added later without breaking the API.
+2. ~~**Is per-call deep-copy cost acceptable for `Get()`?**~~ **Answered in PR review:** expose both — `Get()` returns a shared read-only snapshot with no copy cost, and `GetDeepCopy()` returns an isolated deep copy — so the user chooses per call site.
 
 3. **Polling vs. OS file notifications, and what interval?**
    *Assumed:* polling, default 3s, configurable via `WithPollInterval`. fsnotify support can be added later behind an option if sub-second reaction time is ever needed.
@@ -170,5 +176,4 @@ Answers to these would most change the design. Each has an assumed answer so imp
 6. **Module path and Go version?**
    *Assumed:* `module github.com/pliu/utils`, Go 1.22.
 
-7. **Strictness beyond the spec:** should a *duplicate* key or trailing garbage in the JSON be rejected? `encoding/json` accepts both (last duplicate wins; `Decoder` without a follow-up `More()` check ignores trailing data).
-   *Assumed:* match the spec only — lenient on extras, strict on types and required fields. We will reject trailing garbage (cheap `dec.More()` check, almost always indicates a corrupt write) but accept duplicate keys.
+7. ~~**Strictness beyond the spec:** should a *duplicate* key or trailing garbage in the JSON be rejected?~~ **Answered in PR review:** reject duplicate keys — they make it difficult to determine what the author actually intended. Trailing garbage is rejected as well (cheap `dec.More()` check, almost always indicates a corrupt write).
