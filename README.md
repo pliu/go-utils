@@ -3,23 +3,23 @@
 Reusable Go utilities. Each tool lives in its own package so importers only
 pull in what they use.
 
-| Package | Description | Example |
+| Package | Description | Documentation |
 |---|---|---|
-| [`configmanager`](./configmanager) | Generic, type-safe, hot-reloading JSON config loader. | [Usage](./configmanager/EXAMPLE.md) |
-| [`set`](./set) | Generic set for comparable Go values. | [Usage](./set/EXAMPLE.md) |
-| [`sorted_list`](./sorted_list) | Sorted `int64` multiset with indexed rank lookup. | [Usage](./sorted_list/EXAMPLE.md) |
-| [`stats`](./stats) | Concurrent sliding-window averages and percentiles. | [Usage](./stats/EXAMPLE.md) |
+| [`configmanager`](./configmanager) | Generic, type-safe, hot-reloading JSON config loader. | [README](./configmanager/README.md) |
+| [`set`](./set) | Generic set for comparable Go values. | [README](./set/README.md) |
+| [`sorted_list`](./sorted_list) | Sorted `int64` multiset with indexed rank lookup. | [README](./sorted_list/README.md) |
+| [`stats`](./stats) | Concurrent sliding-window averages and percentiles. | [README](./stats/README.md) |
 
 ## set
 
 `Set` ignores duplicate additions and also provides `Len` and `Equals`.
-See the [`set` example](./set/EXAMPLE.md) for usage.
+See the [`set` README](./set/README.md) for usage.
 
 ## sorted_list
 
 `SortedList` is an `int64` multiset backed by a rank-aware red-black tree.
 `Merge` copies every occurrence from another list, while leaving the source
-unchanged. See the [`sorted_list` example](./sorted_list/EXAMPLE.md) for usage.
+unchanged. See the [`sorted_list` README](./sorted_list/README.md) for usage.
 
 ## stats
 
@@ -27,11 +27,11 @@ unchanged. See the [`sorted_list` example](./sorted_list/EXAMPLE.md) for usage.
 are removed when the tracker is read or updated. `Percentile` accepts values
 from `0` through `100`; it returns the element at
 `floor((count-1) * percentile/100)`. Use `Values`, `Len`, or `Merge` to inspect
-and combine trackers. See the [`stats` example](./stats/EXAMPLE.md) for usage.
+and combine trackers. See the [`stats` README](./stats/README.md) for usage.
 
 ## configmanager
 
-See the [`configmanager` example](./configmanager/EXAMPLE.md) for setup and
+See the [`configmanager` README](./configmanager/README.md) for setup and
 usage.
 
 - The file is polled in the background (default every 3s, see
@@ -52,7 +52,7 @@ usage.
 Each manager exposes an opt-in collector. It is never registered globally and
 does not start a metrics server, so it can be added to an application's own
 registry; see the
-[Prometheus example](./configmanager/EXAMPLE.md#prometheus-metrics).
+[Prometheus example](./configmanager/README.md#prometheus-metrics).
 
 | Metric | Type | Description |
 |---|---|---|
@@ -61,7 +61,7 @@ registry; see the
 
 When registering collectors from multiple managers in the same registry, add
 a const label to distinguish them, as shown in the
-[Prometheus example](./configmanager/EXAMPLE.md#prometheus-metrics).
+[Prometheus example](./configmanager/README.md#prometheus-metrics).
 
 ## License
 

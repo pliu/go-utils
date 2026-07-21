@@ -1,4 +1,10 @@
-# `set` example
+# `set`
+
+Generic set for comparable Go values.
+
+`Set` ignores duplicate additions and also provides `Len` and `Equals`.
+
+## Example
 
 ```go
 import "github.com/pliu/go-utils/set"
@@ -12,5 +18,4 @@ items := seen.Items()             // iteration order is unspecified
 seen.Remove("beta")
 ```
 
-Duplicate additions do not change the set's length. `Equals` compares two
-sets without depending on their iteration order.
+`Equals` compares two sets without depending on their iteration order.
