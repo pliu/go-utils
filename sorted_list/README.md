@@ -22,7 +22,8 @@ scores.Insert(20)
 ordered := scores.Keys()           // []int64{10, 20, 20}
 second, ok := scores.GetByIndex(1) // 20, true
 
-scores.Delete(20)                  // removes one occurrence
+removed := scores.Delete(20)       // true: removed one of the two 20s
+missing := scores.Delete(99)       // false: nothing to remove
 ```
 
 `Merge` copies every occurrence from another list, leaving the source
@@ -33,16 +34,16 @@ unchanged.
 | Operation | Cost |
 |---|---|
 | `Insert` | O(log n) |
-| `Delete` | O(log n), removes one occurrence |
+| `Delete` | O(log n), removes one occurrence and reports whether it found one |
 | `GetByIndex` | O(log n) |
 | `Len` | O(1) |
 | `Keys` | O(n), allocates |
 | `Merge` | O(m log n) for a source of m occurrences |
 
-`Delete` on a key that is not present is a no-op, and `GetByIndex` reports
-`false` for an out-of-range index rather than panicking. A `SortedList` is not
-safe for concurrent use; guard it with your own lock if several goroutines
-share one instance.
+`Delete` on a key that is not present is a no-op returning `false`, and
+`GetByIndex` reports `false` for an out-of-range index rather than panicking.
+A `SortedList` is not safe for concurrent use; guard it with your own lock if
+several goroutines share one instance.
 
 ## Invariants
 

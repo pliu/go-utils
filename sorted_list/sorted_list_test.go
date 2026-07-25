@@ -38,7 +38,7 @@ func TestSortedListDelete(t *testing.T) {
 	sl.Insert(20)
 
 	// One of the two occurrences of 10 goes; the key itself remains.
-	sl.Delete(10)
+	require.True(t, sl.Delete(10))
 	require.Equal(t, 3, sl.Len())
 
 	value, ok := sl.GetByIndex(0)
@@ -50,13 +50,14 @@ func TestSortedListDelete(t *testing.T) {
 	require.Equal(t, int64(10), value)
 
 	// The last occurrence goes, removing the key.
-	sl.Delete(10)
+	require.True(t, sl.Delete(10))
 	require.Equal(t, 2, sl.Len())
 	value, ok = sl.GetByIndex(1)
 	require.True(t, ok)
 	require.Equal(t, int64(20), value)
 
-	sl.Delete(42) // no-op
+	require.False(t, sl.Delete(10), "key is now gone")
+	require.False(t, sl.Delete(42), "key was never present")
 	require.Equal(t, 2, sl.Len())
 }
 
@@ -176,7 +177,8 @@ func TestInvariantsAfterRandomizedOps(t *testing.T) {
 			sl.Insert(key)
 			counts[key]++
 		} else {
-			sl.Delete(key)
+			// The reported outcome must match whether the model held the key.
+			require.Equalf(t, counts[key] > 0, sl.Delete(key), "Delete(%d)", key)
 			if counts[key] > 0 {
 				counts[key]--
 				if counts[key] == 0 {

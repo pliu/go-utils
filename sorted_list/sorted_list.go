@@ -115,22 +115,24 @@ func (sl *SortedList) insertCount(key int64, count int) {
 	sl.len += count
 }
 
-// Delete removes one occurrence of key if present.
-func (sl *SortedList) Delete(key int64) {
+// Delete removes one occurrence of key, reporting whether one was found.
+// Deleting a key that is not present is a no-op and returns false.
+func (sl *SortedList) Delete(key int64) bool {
 	node := sl.find(key)
 	if node == nil {
-		return
+		return false
 	}
 
 	if node.count > 1 {
 		node.count--
 		sl.recomputeSizes(node)
 		sl.len--
-		return
+		return true
 	}
 
 	sl.deleteNode(node)
 	sl.len--
+	return true
 }
 
 // GetByIndex returns the key stored at a 0-based position.
