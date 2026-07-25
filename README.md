@@ -6,6 +6,7 @@ pull in what they use.
 | Package | Description | Documentation |
 |---|---|---|
 | [`configmanager`](./configmanager) | Generic, type-safe, hot-reloading JSON config loader. | [README](./configmanager/README.md) |
+| [`labelmatch`](./labelmatch) | Rule-based label set matching and mutation. | [README](./labelmatch/README.md) |
 | [`set`](./set) | Generic set for comparable Go values. | [README](./set/README.md) |
 | [`sorted_list`](./sorted_list) | Sorted `int64` multiset with indexed rank lookup. | [README](./sorted_list/README.md) |
 | [`stats`](./stats) | Concurrent sliding-window averages and percentiles. | [README](./stats/README.md) |
