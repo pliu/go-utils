@@ -87,14 +87,30 @@ func TestSortedListMerge(t *testing.T) {
 
 func TestSortedListKeys(t *testing.T) {
 	sl := NewSortedList()
-	require.Empty(t, sl.Keys())
+	require.Empty(t, slices.Collect(sl.Keys()))
 
 	values := []int64{10, 5, 10, 7, 7, 20}
 	for _, v := range values {
 		sl.Insert(v)
 	}
 
-	require.Equal(t, []int64{5, 7, 7, 10, 10, 20}, sl.Keys())
+	require.Equal(t, []int64{5, 7, 7, 10, 10, 20}, slices.Collect(sl.Keys()))
+}
+
+func TestSortedListKeysStopsEarly(t *testing.T) {
+	sl := NewSortedList()
+	for _, value := range []int64{10, 5, 10, 7, 7, 20} {
+		sl.Insert(value)
+	}
+
+	var values []int64
+	for value := range sl.Keys() {
+		values = append(values, value)
+		if len(values) == 3 {
+			break
+		}
+	}
+	require.Equal(t, []int64{5, 7, 7}, values)
 }
 
 // --- structural invariants ---
@@ -210,7 +226,7 @@ func TestInvariantsAfterRandomizedOps(t *testing.T) {
 			expected = append(expected, k)
 		}
 	}
-	require.Equal(t, expected, sl.Keys())
+	require.Equal(t, expected, slices.Collect(sl.Keys()))
 	for i, k := range expected {
 		got, ok := sl.GetByIndex(i)
 		require.True(t, ok)

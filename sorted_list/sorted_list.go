@@ -1,5 +1,7 @@
 package sorted_list
 
+import "iter"
+
 // SortedList maintains keys with multiplicity using a red-black tree. It supports
 // inserting and deleting key occurrences while allowing rank lookups without
 // storing per-key payload values.
@@ -30,25 +32,27 @@ func (sl *SortedList) Len() int {
 	return sl.len
 }
 
-// Keys returns all keys in ascending order, including duplicates.
-func (sl *SortedList) Keys() []int64 {
-	if sl.len == 0 {
-		return []int64{}
+// Keys iterates over keys in ascending order, including duplicates.
+// The SortedList must not be modified during iteration.
+func (sl *SortedList) Keys() iter.Seq[int64] {
+	return func(yield func(int64) bool) {
+		sl.yieldKeys(sl.root, yield)
 	}
-	result := make([]int64, 0, sl.len)
-	sl.appendKeys(sl.root, &result)
-	return result
 }
 
-func (sl *SortedList) appendKeys(node *sortedListNode, out *[]int64) {
+func (sl *SortedList) yieldKeys(node *sortedListNode, yield func(int64) bool) bool {
 	if node == nil {
-		return
+		return true
 	}
-	sl.appendKeys(node.left, out)
+	if !sl.yieldKeys(node.left, yield) {
+		return false
+	}
 	for i := 0; i < node.count; i++ {
-		*out = append(*out, node.key)
+		if !yield(node.key) {
+			return false
+		}
 	}
-	sl.appendKeys(node.right, out)
+	return sl.yieldKeys(node.right, yield)
 }
 
 // Merge inserts all keys from other into this sorted list.

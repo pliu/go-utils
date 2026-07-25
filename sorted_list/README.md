@@ -12,14 +12,20 @@ with a count, so a multiset with many duplicates stays compact.
 ## Example
 
 ```go
-import "github.com/pliu/go-utils/sorted_list"
+import (
+    "fmt"
+
+    "github.com/pliu/go-utils/sorted_list"
+)
 
 scores := sorted_list.NewSortedList()
 scores.Insert(20)
 scores.Insert(10)
 scores.Insert(20)
 
-ordered := scores.Keys()           // []int64{10, 20, 20}
+for score := range scores.Keys() { // 10, 20, 20
+    fmt.Println(score)
+}
 second, ok := scores.GetByIndex(1) // 20, true
 
 removed := scores.Delete(20)       // true: removed one of the two 20s
@@ -37,11 +43,13 @@ unchanged.
 | `Delete` | O(log n), removes one occurrence and reports whether it found one |
 | `GetByIndex` | O(log n) |
 | `Len` | O(1) |
-| `Keys` | O(n), allocates |
+| `Keys` | O(n) for a full traversal, does not allocate |
 | `Merge` | O(m log n) for a source of m occurrences |
 
 `Delete` on a key that is not present is a no-op returning `false`, and
 `GetByIndex` reports `false` for an out-of-range index rather than panicking.
+`Keys` can be stopped early and the list must not be modified while its
+iterator is running.
 A `SortedList` is not safe for concurrent use; guard it with your own lock if
 several goroutines share one instance.
 

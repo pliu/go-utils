@@ -7,6 +7,7 @@ import (
 )
 
 var sizes = []int{100, 10_000, 1_000_000}
+var benchmarkKeysSum int64
 
 // fill returns a list of n occurrences drawn from a keyspace of the given
 // size, so a keyspace far below n exercises the multiset's shared-node path
@@ -105,7 +106,11 @@ func BenchmarkKeys(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for range b.N {
-				_ = sl.Keys()
+				var sum int64
+				for key := range sl.Keys() {
+					sum += key
+				}
+				benchmarkKeysSum = sum
 			}
 		})
 	}

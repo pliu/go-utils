@@ -109,7 +109,11 @@ func (s *Stats) Values() []int64 {
 	if s.values == nil || s.values.Len() == 0 {
 		return []int64{}
 	}
-	return s.values.Keys()
+	values := make([]int64, 0, s.values.Len())
+	for value := range s.values.Keys() {
+		values = append(values, value)
+	}
+	return values
 }
 
 func (s *Stats) Merge(other *Stats) {
