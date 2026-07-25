@@ -1,10 +1,12 @@
 package stats
 
 import (
+	"slices"
 	"sync"
 	"time"
 
 	"github.com/benbjohnson/clock"
+	"github.com/pliu/go-utils/ring"
 	"github.com/pliu/go-utils/sorted_list"
 )
 
@@ -16,7 +18,7 @@ import (
 type Stats struct {
 	mu         sync.Mutex
 	values     *sorted_list.SortedList
-	window     ring
+	window     ring.Ring[measurement]
 	windowSize time.Duration
 	clock      clock.Clock
 	sum        int64
@@ -45,7 +47,7 @@ func (s *Stats) Add(value int64) {
 
 	now := s.clock.Now()
 	s.values.Insert(value)
-	s.window.push(measurement{timestamp: now, value: value})
+	s.window.Push(measurement{timestamp: now, value: value})
 	s.sum += value
 	s.cleanup(now)
 }
@@ -128,10 +130,7 @@ func (s *Stats) Merge(other *Stats) {
 	tmpValues := sorted_list.NewSortedList()
 	tmpValues.Merge(other.values)
 	otherSum := other.sum
-	measurements := make([]measurement, 0, other.window.len())
-	for i := range other.window.len() {
-		measurements = append(measurements, other.window.at(i))
-	}
+	measurements := slices.Collect(other.window.All())
 	other.mu.Unlock()
 
 	s.mu.Lock()
@@ -150,37 +149,34 @@ func (s *Stats) mergeMeasurements(ms []measurement) {
 	if len(ms) == 0 {
 		return
 	}
-	if s.window.len() == 0 {
+	if s.window.Len() == 0 {
 		for _, m := range ms {
-			s.window.push(m)
+			s.window.Push(m)
 		}
 		return
 	}
 
-	merged := make([]measurement, 0, s.window.len()+len(ms))
-	i, j := 0, 0
-	for j < s.window.len() {
-		existing := s.window.at(j)
-		if i < len(ms) && ms[i].timestamp.Before(existing.timestamp) {
+	merged := make([]measurement, 0, s.window.Len()+len(ms))
+	i := 0
+	for existing := range s.window.All() {
+		for i < len(ms) && ms[i].timestamp.Before(existing.timestamp) {
 			merged = append(merged, ms[i])
 			i++
-			continue
 		}
 		merged = append(merged, existing)
-		j++
 	}
 	merged = append(merged, ms[i:]...)
 
-	s.window.reset()
+	s.window.Reset()
 	for _, m := range merged {
-		s.window.push(m)
+		s.window.Push(m)
 	}
 }
 
 // cleanup removes measurements that are older than the window size.
 func (s *Stats) cleanup(now time.Time) {
 	for {
-		m, ok := s.window.front()
+		m, ok := s.window.Front()
 		if !ok || now.Sub(m.timestamp) <= s.windowSize {
 			// The window is ordered by time, so the first live measurement
 			// means everything behind it is live too.
@@ -188,6 +184,6 @@ func (s *Stats) cleanup(now time.Time) {
 		}
 		s.values.Delete(m.value)
 		s.sum -= m.value
-		s.window.pop()
+		s.window.Pop()
 	}
 }

@@ -28,8 +28,8 @@ percentiles, ok := latency.Percentile([]float64{50, 95}) // []int64{20, 20}, tru
 
 ## Performance
 
-Values are held twice: in arrival order in a ring buffer, so the oldest can be
-expired, and in sorted order in a [`sorted_list`](../sorted_list), so a
+Values are held twice: in arrival order in a [`ring`](../ring), so the oldest
+can be expired, and in sorted order in a [`sorted_list`](../sorted_list), so a
 percentile is an O(log n) rank lookup rather than a sort. `Average` is O(1)
 against a running sum.
 
