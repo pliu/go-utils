@@ -229,9 +229,11 @@ func (sl *SortedList) leftRotate(x *sortedListNode) {
 	y.left = x
 	x.parent = y
 
+	// A rotation only rearranges nodes within one subtree, so the subtree's
+	// total is unchanged and no ancestor's size can differ. Fixing the two
+	// rotated nodes is enough; walking to the root would be wasted work.
 	sl.updateSize(x)
 	sl.updateSize(y)
-	sl.recomputeSizes(y.parent)
 }
 
 func (sl *SortedList) rightRotate(y *sortedListNode) {
@@ -251,9 +253,9 @@ func (sl *SortedList) rightRotate(y *sortedListNode) {
 	x.right = y
 	y.parent = x
 
+	// See leftRotate: ancestors' sizes are unaffected by a rotation.
 	sl.updateSize(y)
 	sl.updateSize(x)
-	sl.recomputeSizes(x.parent)
 }
 
 func (sl *SortedList) insertFixup(z *sortedListNode) {
@@ -297,126 +299,135 @@ func (sl *SortedList) insertFixup(z *sortedListNode) {
 }
 
 func (sl *SortedList) deleteNode(z *sortedListNode) {
-	var x, y *sortedListNode
-
-	if z.left == nil || z.right == nil {
-		y = z
-	} else {
+	// y is the node physically spliced out of the tree: z itself when it has
+	// at most one child, otherwise its successor, whose key and count move
+	// into z.
+	y := z
+	if z.left != nil && z.right != nil {
 		y = sl.successor(z)
 	}
 
-	removed := y.count
-	parentBeforeRemoval := y.parent
-	sl.adjustSizesOnDelete(y, removed)
-
-	if y.left != nil {
-		x = y.left
-	} else {
+	// x takes y's place and may be nil, so y's parent is captured separately:
+	// the rebalance below still needs it after the splice.
+	x := y.left
+	if x == nil {
 		x = y.right
 	}
+	parent := y.parent
 
 	if x != nil {
-		x.parent = y.parent
+		x.parent = parent
 	}
-
-	if y.parent == nil {
+	switch {
+	case parent == nil:
 		sl.root = x
-	} else if y == y.parent.left {
-		y.parent.left = x
-	} else {
-		y.parent.right = x
+	case y == parent.left:
+		parent.left = x
+	default:
+		parent.right = x
 	}
 
 	if y != z {
 		z.key = y.key
 		z.count = y.count
-		sl.recomputeSizes(z)
-	} else if parentBeforeRemoval != nil {
-		sl.recomputeSizes(parentBeforeRemoval)
-	} else if sl.root != nil {
-		sl.recomputeSizes(sl.root)
 	}
 
-	if parentBeforeRemoval != nil {
-		sl.recomputeSizes(parentBeforeRemoval)
+	// Only the path from the splice point to the root changes size, and
+	// recomputeSizes rebuilds each node from its children, so a single walk
+	// from the deepest affected node is enough. When y came from under z,
+	// that path runs through z and so also picks up z's new count.
+	if parent != nil {
+		sl.recomputeSizes(parent)
 	}
 
+	// Removing a black node shortens every path through it by one, which
+	// must be repaired even when its replacement is nil — a missing child
+	// counts as black and still needs rebalancing above it.
 	if y.color == colorBlack {
-		if x != nil {
-			sl.deleteFixup(x)
+		sl.deleteFixup(x, parent)
+	}
+}
+
+// isRed and isBlack treat a missing child as black, which is what lets the
+// fixup below reason about nil nodes without a sentinel.
+func isRed(n *sortedListNode) bool   { return n != nil && n.color == colorRed }
+func isBlack(n *sortedListNode) bool { return n == nil || n.color == colorBlack }
+
+// deleteFixup restores the red-black invariants after a black node was
+// spliced out. x is the node that took its place and may be nil, so its
+// parent is passed explicitly rather than read from x — that is the whole
+// reason this takes two arguments.
+func (sl *SortedList) deleteFixup(x, parent *sortedListNode) {
+	for x != sl.root && isBlack(x) {
+		if parent == nil {
+			break
 		}
-	}
-}
-
-func (sl *SortedList) adjustSizesOnDelete(node *sortedListNode, removed int) {
-	for current := parentOfNode(node); current != nil; current = parentOfNode(current) {
-		current.size -= removed
-	}
-}
-
-func (sl *SortedList) deleteFixup(x *sortedListNode) {
-	for x != sl.root && (x == nil || x.color == colorBlack) {
-		if x == parentOfNode(x).left {
-			w := parentOfNode(x).right
-			if w != nil && w.color == colorRed {
+		if x == parent.left {
+			w := parent.right
+			if isRed(w) {
 				w.color = colorBlack
-				parentOfNode(x).color = colorRed
-				sl.leftRotate(parentOfNode(x))
-				w = parentOfNode(x).right
+				parent.color = colorRed
+				sl.leftRotate(parent)
+				w = parent.right
 			}
-			if w != nil && (w.left == nil || w.left.color == colorBlack) && (w.right == nil || w.right.color == colorBlack) {
+			if w == nil {
+				x, parent = parent, parent.parent
+				continue
+			}
+			if isBlack(w.left) && isBlack(w.right) {
 				w.color = colorRed
-				x = parentOfNode(x)
-			} else if w != nil {
-				if w.right == nil || w.right.color == colorBlack {
-					if w.left != nil {
-						w.left.color = colorBlack
-					}
-					w.color = colorRed
-					sl.rightRotate(w)
-					w = parentOfNode(x).right
-				}
-				w.color = parentOfNode(x).color
-				parentOfNode(x).color = colorBlack
-				if w.right != nil {
-					w.right.color = colorBlack
-				}
-				sl.leftRotate(parentOfNode(x))
-				x = sl.root
-			} else {
-				x = parentOfNode(x)
+				x, parent = parent, parent.parent
+				continue
 			}
-		} else {
-			w := parentOfNode(x).left
-			if w != nil && w.color == colorRed {
-				w.color = colorBlack
-				parentOfNode(x).color = colorRed
-				sl.rightRotate(parentOfNode(x))
-				w = parentOfNode(x).left
-			}
-			if w != nil && (w.right == nil || w.right.color == colorBlack) && (w.left == nil || w.left.color == colorBlack) {
-				w.color = colorRed
-				x = parentOfNode(x)
-			} else if w != nil {
-				if w.left == nil || w.left.color == colorBlack {
-					if w.right != nil {
-						w.right.color = colorBlack
-					}
-					w.color = colorRed
-					sl.leftRotate(w)
-					w = parentOfNode(x).left
-				}
-				w.color = parentOfNode(x).color
-				parentOfNode(x).color = colorBlack
+			if isBlack(w.right) {
 				if w.left != nil {
 					w.left.color = colorBlack
 				}
-				sl.rightRotate(parentOfNode(x))
-				x = sl.root
-			} else {
-				x = parentOfNode(x)
+				w.color = colorRed
+				sl.rightRotate(w)
+				w = parent.right
 			}
+			w.color = parent.color
+			parent.color = colorBlack
+			if w.right != nil {
+				w.right.color = colorBlack
+			}
+			sl.leftRotate(parent)
+			x, parent = sl.root, nil
+			continue
 		}
+
+		w := parent.left
+		if isRed(w) {
+			w.color = colorBlack
+			parent.color = colorRed
+			sl.rightRotate(parent)
+			w = parent.left
+		}
+		if w == nil {
+			x, parent = parent, parent.parent
+			continue
+		}
+		if isBlack(w.right) && isBlack(w.left) {
+			w.color = colorRed
+			x, parent = parent, parent.parent
+			continue
+		}
+		if isBlack(w.left) {
+			if w.right != nil {
+				w.right.color = colorBlack
+			}
+			w.color = colorRed
+			sl.leftRotate(w)
+			w = parent.left
+		}
+		w.color = parent.color
+		parent.color = colorBlack
+		if w.left != nil {
+			w.left.color = colorBlack
+		}
+		sl.rightRotate(parent)
+		x, parent = sl.root, nil
 	}
 	if x != nil {
 		x.color = colorBlack
