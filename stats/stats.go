@@ -157,7 +157,9 @@ func (s *Stats) mergeMeasurements(ms []measurement) {
 
 	merged := make([]measurement, 0, s.window.Len()+len(ms))
 	i := 0
-	for _, existing := range s.window.All() {
+	// s.mu keeps the window stable, so indexed reads avoid another snapshot.
+	for j := range s.window.Len() {
+		existing, _ := s.window.At(j)
 		for i < len(ms) && ms[i].timestamp.Before(existing.timestamp) {
 			merged = append(merged, ms[i])
 			i++
