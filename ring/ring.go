@@ -14,7 +14,6 @@
 package ring
 
 import (
-	"iter"
 	"math/bits"
 )
 
@@ -119,16 +118,17 @@ func (r *Ring[T]) Reset() {
 	r.n = 0
 }
 
-// All iterates from oldest to newest. The Ring must not be modified during
-// iteration.
-func (r *Ring[T]) All() iter.Seq[T] {
-	return func(yield func(T) bool) {
-		for i := range r.n {
-			if !yield(r.buf[(r.head+i)&(len(r.buf)-1)]) {
-				return
-			}
-		}
+// All returns a snapshot of the elements from oldest to newest. The returned
+// slice does not share its backing array with the Ring.
+func (r *Ring[T]) All() []T {
+	items := make([]T, r.n)
+	if r.n == 0 {
+		return items
 	}
+
+	copied := copy(items, r.buf[r.head:])
+	copy(items[copied:], r.buf[:r.head])
+	return items
 }
 
 // grow doubles the capacity and unwraps the contents so the oldest element

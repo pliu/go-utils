@@ -1,7 +1,6 @@
 package stats
 
 import (
-	"slices"
 	"sync"
 	"time"
 
@@ -130,7 +129,7 @@ func (s *Stats) Merge(other *Stats) {
 	tmpValues := sorted_list.NewSortedList()
 	tmpValues.Merge(other.values)
 	otherSum := other.sum
-	measurements := slices.Collect(other.window.All())
+	measurements := other.window.All()
 	other.mu.Unlock()
 
 	s.mu.Lock()
@@ -158,7 +157,7 @@ func (s *Stats) mergeMeasurements(ms []measurement) {
 
 	merged := make([]measurement, 0, s.window.Len()+len(ms))
 	i := 0
-	for existing := range s.window.All() {
+	for _, existing := range s.window.All() {
 		for i < len(ms) && ms[i].timestamp.Before(existing.timestamp) {
 			merged = append(merged, ms[i])
 			i++

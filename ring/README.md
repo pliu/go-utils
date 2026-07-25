@@ -23,7 +23,7 @@ window.Push(20)
 oldest, ok := window.Front() // 10, true — peek without removing
 first, ok := window.Pop()    // 10, true — remove and return
 
-for v := range window.All() { // oldest to newest
+for _, v := range window.All() { // oldest to newest
     fmt.Println(v)
 }
 ```
@@ -41,11 +41,13 @@ with a floor of 8, so wrapping an index is a mask rather than a division.
 | `At` | O(1), indexed from the oldest element |
 | `Len`, `Cap` | O(1) |
 | `Reset` | O(n), keeps the backing array |
-| `All` | O(n), allocation-free iterator |
+| `All` | O(n), allocates a snapshot |
 
 `At` and `Front` report `false` rather than panicking on an out-of-range
 index or an empty queue. `Pop` and `Reset` zero the slots they vacate, so a
 popped element holding pointers does not stay reachable through the buffer.
+`All` returns a fresh slice ordered from oldest to newest, so later changes
+to the ring do not affect it, and changes to the slice do not affect the ring.
 A `Ring` is not safe for concurrent use.
 
 **Capacity only ever grows.** `Pop` advances the head and leaves the slot

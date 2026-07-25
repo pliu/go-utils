@@ -93,7 +93,7 @@ func BenchmarkAll(b *testing.B) {
 			b.ResetTimer()
 			for range b.N {
 				var sum int64
-				for v := range r.All() {
+				for _, v := range r.All() {
 					sum += v.a
 				}
 				_ = sum

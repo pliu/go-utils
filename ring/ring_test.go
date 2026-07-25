@@ -2,14 +2,13 @@ package ring
 
 import (
 	"math/rand"
-	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
 
 func values[T any](r *Ring[T]) []T {
-	return slices.Collect(r.All())
+	return r.All()
 }
 
 func TestZeroValueIsUsable(t *testing.T) {
@@ -166,13 +165,41 @@ func TestAllStopsEarly(t *testing.T) {
 		r.Push(i)
 	}
 	var seen []int
-	for v := range r.All() {
+	for _, v := range r.All() {
 		seen = append(seen, v)
 		if len(seen) == 3 {
 			break
 		}
 	}
 	require.Equal(t, []int{0, 1, 2}, seen)
+}
+
+func TestAllReturnsSnapshot(t *testing.T) {
+	r := NewRingWithCapacity[int](minCapacity)
+	for i := range minCapacity {
+		r.Push(i)
+	}
+	for range 5 {
+		r.Pop()
+	}
+	for i := minCapacity; i < minCapacity+5; i++ {
+		r.Push(i)
+	}
+	require.Greater(t, r.head, 0, "ring must be wrapped for this test to mean anything")
+
+	snapshot := r.All()
+	require.Equal(t, []int{5, 6, 7, 8, 9, 10, 11, 12}, snapshot)
+
+	snapshot[0] = -1
+	front, ok := r.Front()
+	require.True(t, ok)
+	require.Equal(t, 5, front, "mutating the snapshot must not mutate the ring")
+
+	snapshot = r.All()
+	r.Reset()
+	r.Push(99)
+	require.Equal(t, []int{5, 6, 7, 8, 9, 10, 11, 12}, snapshot,
+		"mutating the ring must not mutate an existing snapshot")
 }
 
 // Cross-check against a plain slice under randomized push/pop.
