@@ -7,10 +7,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func values[T any](r *Ring[T]) []T {
-	return r.All()
-}
-
 func TestZeroValueIsUsable(t *testing.T) {
 	var r Ring[int]
 	require.Equal(t, 0, r.Len())
@@ -22,10 +18,10 @@ func TestZeroValueIsUsable(t *testing.T) {
 	require.False(t, ok)
 	_, ok = r.At(0)
 	require.False(t, ok)
-	require.Empty(t, values(&r))
+	require.Empty(t, r.Items())
 
 	r.Push(1)
-	require.Equal(t, []int{1}, values(&r))
+	require.Equal(t, []int{1}, r.Items())
 }
 
 func TestFIFO(t *testing.T) {
@@ -34,7 +30,7 @@ func TestFIFO(t *testing.T) {
 		r.Push(i)
 	}
 	require.Equal(t, 5, r.Len())
-	require.Equal(t, []int{0, 1, 2, 3, 4}, values(&r))
+	require.Equal(t, []int{0, 1, 2, 3, 4}, r.Items())
 
 	for i := range 5 {
 		front, ok := r.Front()
@@ -88,11 +84,11 @@ func TestGrowthWhileWrapped(t *testing.T) {
 	require.Greater(t, r.head, 0, "ring must be wrapped for this test to mean anything")
 	require.Equal(t, r.Len(), r.Cap(), "ring must be full so the next push grows it")
 
-	before := values(&r)
+	before := r.Items()
 	for i := 100; i < 100+minCapacity; i++ {
 		r.Push(i)
 	}
-	require.Equal(t, append(before, 100, 101, 102, 103, 104, 105, 106, 107), values(&r))
+	require.Equal(t, append(before, 100, 101, 102, 103, 104, 105, 106, 107), r.Items())
 }
 
 func TestCapacityIsPowerOfTwo(t *testing.T) {
@@ -156,25 +152,10 @@ func TestReset(t *testing.T) {
 	require.False(t, ok)
 
 	r.Push(42)
-	require.Equal(t, []int{42}, values(&r))
+	require.Equal(t, []int{42}, r.Items())
 }
 
-func TestAllStopsEarly(t *testing.T) {
-	var r Ring[int]
-	for i := range 10 {
-		r.Push(i)
-	}
-	var seen []int
-	for _, v := range r.All() {
-		seen = append(seen, v)
-		if len(seen) == 3 {
-			break
-		}
-	}
-	require.Equal(t, []int{0, 1, 2}, seen)
-}
-
-func TestAllReturnsSnapshot(t *testing.T) {
+func TestItemsReturnsSnapshot(t *testing.T) {
 	r := NewRingWithCapacity[int](minCapacity)
 	for i := range minCapacity {
 		r.Push(i)
@@ -187,7 +168,7 @@ func TestAllReturnsSnapshot(t *testing.T) {
 	}
 	require.Greater(t, r.head, 0, "ring must be wrapped for this test to mean anything")
 
-	snapshot := r.All()
+	snapshot := r.Items()
 	require.Equal(t, []int{5, 6, 7, 8, 9, 10, 11, 12}, snapshot)
 
 	snapshot[0] = -1
@@ -195,7 +176,7 @@ func TestAllReturnsSnapshot(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, 5, front, "mutating the snapshot must not mutate the ring")
 
-	snapshot = r.All()
+	snapshot = r.Items()
 	r.Reset()
 	r.Push(99)
 	require.Equal(t, []int{5, 6, 7, 8, 9, 10, 11, 12}, snapshot,
@@ -224,5 +205,5 @@ func TestMatchesSliceModel(t *testing.T) {
 		}
 		require.Equal(t, len(model), r.Len())
 	}
-	require.Equal(t, model, values(&r))
+	require.Equal(t, model, r.Items())
 }

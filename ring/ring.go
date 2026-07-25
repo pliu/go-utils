@@ -118,14 +118,11 @@ func (r *Ring[T]) Reset() {
 	r.n = 0
 }
 
-// All returns a snapshot of the elements from oldest to newest. The returned
-// slice does not share its backing array with the Ring.
-func (r *Ring[T]) All() []T {
+// Items returns a snapshot of the elements from oldest to newest. Each call
+// allocates a new slice containing Len elements; the returned slice does not
+// share its backing array with the Ring.
+func (r *Ring[T]) Items() []T {
 	items := make([]T, r.n)
-	if r.n == 0 {
-		return items
-	}
-
 	copied := copy(items, r.buf[r.head:])
 	copy(items[copied:], r.buf[:r.head])
 	return items

@@ -129,7 +129,7 @@ func (s *Stats) Merge(other *Stats) {
 	tmpValues := sorted_list.NewSortedList()
 	tmpValues.Merge(other.values)
 	otherSum := other.sum
-	measurements := other.window.All()
+	measurements := other.window.Items()
 	other.mu.Unlock()
 
 	s.mu.Lock()
@@ -157,7 +157,7 @@ func (s *Stats) mergeMeasurements(ms []measurement) {
 
 	merged := make([]measurement, 0, s.window.Len()+len(ms))
 	i := 0
-	// s.mu keeps the window stable, so indexed reads avoid another snapshot.
+	// s.mu keeps the window stable, and j is bounded by Len, so At succeeds.
 	for j := range s.window.Len() {
 		existing, _ := s.window.At(j)
 		for i < len(ms) && ms[i].timestamp.Before(existing.timestamp) {

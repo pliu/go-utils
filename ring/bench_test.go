@@ -82,7 +82,7 @@ func BenchmarkAt(b *testing.B) {
 	}
 }
 
-func BenchmarkAll(b *testing.B) {
+func BenchmarkItems(b *testing.B) {
 	for _, n := range []int{100, 10_000} {
 		b.Run(fmt.Sprintf("n=%d", n), func(b *testing.B) {
 			r := NewRingWithCapacity[payload](n)
@@ -93,7 +93,7 @@ func BenchmarkAll(b *testing.B) {
 			b.ResetTimer()
 			for range b.N {
 				var sum int64
-				for _, v := range r.All() {
+				for _, v := range r.Items() {
 					sum += v.a
 				}
 				_ = sum
