@@ -48,6 +48,14 @@ index or an empty queue. `Pop` and `Reset` zero the slots they vacate, so a
 popped element holding pointers does not stay reachable through the buffer.
 A `Ring` is not safe for concurrent use.
 
+**Capacity only ever grows.** `Pop` advances the head and leaves the slot
+allocated for the next `Push` to reuse, and `Reset` keeps the whole array —
+that reuse is what makes churn allocation-free. A `Ring` therefore holds
+memory for the longest it has ever been, not for its current length, so a
+transient spike raises the floor permanently. Where that matters, size the
+queue with `NewRingWithCapacity` and keep an eye on the peak, or use a fresh
+`Ring` rather than `Reset`.
+
 ## Performance
 
 Steady-state churn, where each push is matched by a pop so the length holds

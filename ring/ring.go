@@ -24,6 +24,11 @@ const minCapacity = 8
 
 // Ring is a growable FIFO queue. The zero value is an empty queue ready to
 // use; NewRingWithCapacity avoids the regrowth of filling one from empty.
+//
+// Capacity only ever grows. Pop leaves the vacated slot allocated for the
+// next Push to reuse, and Reset keeps the whole array, so a Ring holds
+// memory for the longest it has ever been rather than for its current
+// length. That reuse is what makes churn allocation-free.
 type Ring[T any] struct {
 	buf  []T
 	head int // index of the oldest element
