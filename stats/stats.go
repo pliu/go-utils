@@ -1,7 +1,6 @@
 package stats
 
 import (
-	"container/list"
 	"sync"
 	"time"
 
@@ -10,10 +9,14 @@ import (
 )
 
 // Stats tracks numeric values in a sliding window and can produce summaries.
+//
+// Values are held twice: in insertion order by window, so the oldest can be
+// expired, and in sorted order by values, so percentiles are a rank lookup
+// rather than a sort.
 type Stats struct {
 	mu         sync.Mutex
 	values     *sorted_list.SortedList
-	window     *list.List
+	window     ring
 	windowSize time.Duration
 	clock      clock.Clock
 	sum        int64
@@ -26,7 +29,6 @@ func NewStats(windowSize time.Duration) *Stats {
 func NewStatsWithClock(windowSize time.Duration, clk clock.Clock) *Stats {
 	return &Stats{
 		values:     sorted_list.NewSortedList(),
-		window:     list.New(),
 		windowSize: windowSize,
 		clock:      clk,
 	}
@@ -43,7 +45,7 @@ func (s *Stats) Add(value int64) {
 
 	now := s.clock.Now()
 	s.values.Insert(value)
-	s.window.PushBack(&measurement{timestamp: now, value: value})
+	s.window.push(measurement{timestamp: now, value: value})
 	s.sum += value
 	s.cleanup(now)
 }
@@ -126,10 +128,9 @@ func (s *Stats) Merge(other *Stats) {
 	tmpValues := sorted_list.NewSortedList()
 	tmpValues.Merge(other.values)
 	otherSum := other.sum
-	measurements := make([]measurement, 0, otherLen)
-	for e := other.window.Front(); e != nil; e = e.Next() {
-		m := e.Value.(*measurement)
-		measurements = append(measurements, *m)
+	measurements := make([]measurement, 0, other.window.len())
+	for i := range other.window.len() {
+		measurements = append(measurements, other.window.at(i))
 	}
 	other.mu.Unlock()
 
@@ -141,57 +142,52 @@ func (s *Stats) Merge(other *Stats) {
 	s.mu.Unlock()
 }
 
+// mergeMeasurements splices ms into the window, keeping it ordered by
+// timestamp. Both inputs are already sorted, so this is a single linear
+// merge; unlike Add it is not allocation-free, but merging is a rare
+// bulk operation rather than the hot path.
 func (s *Stats) mergeMeasurements(ms []measurement) {
 	if len(ms) == 0 {
 		return
 	}
-	if s.window.Len() == 0 {
-		for i := range ms {
-			m := ms[i]
-			s.window.PushBack(&measurement{timestamp: m.timestamp, value: m.value})
+	if s.window.len() == 0 {
+		for _, m := range ms {
+			s.window.push(m)
 		}
 		return
 	}
 
-	newList := list.New()
-	existing := s.window.Front()
-	idx := 0
-
-	for existing != nil && idx < len(ms) {
-		em := existing.Value.(*measurement)
-		if ms[idx].timestamp.Before(em.timestamp) {
-			m := ms[idx]
-			newList.PushBack(&measurement{timestamp: m.timestamp, value: m.value})
-			idx++
-		} else {
-			newList.PushBack(existing.Value)
-			existing = existing.Next()
+	merged := make([]measurement, 0, s.window.len()+len(ms))
+	i, j := 0, 0
+	for j < s.window.len() {
+		existing := s.window.at(j)
+		if i < len(ms) && ms[i].timestamp.Before(existing.timestamp) {
+			merged = append(merged, ms[i])
+			i++
+			continue
 		}
+		merged = append(merged, existing)
+		j++
 	}
+	merged = append(merged, ms[i:]...)
 
-	for ; idx < len(ms); idx++ {
-		m := ms[idx]
-		newList.PushBack(&measurement{timestamp: m.timestamp, value: m.value})
+	s.window.reset()
+	for _, m := range merged {
+		s.window.push(m)
 	}
-
-	for ; existing != nil; existing = existing.Next() {
-		newList.PushBack(existing.Value)
-	}
-
-	s.window = newList
 }
 
 // cleanup removes measurements that are older than the window size.
 func (s *Stats) cleanup(now time.Time) {
-	for e := s.window.Front(); e != nil; e = s.window.Front() {
-		m := e.Value.(*measurement)
-		if now.Sub(m.timestamp) > s.windowSize {
-			s.values.Delete(m.value)
-			s.sum -= m.value
-			s.window.Remove(e)
-		} else {
-			// The list is sorted by time, so we can stop here.
-			break
+	for {
+		m, ok := s.window.front()
+		if !ok || now.Sub(m.timestamp) <= s.windowSize {
+			// The window is ordered by time, so the first live measurement
+			// means everything behind it is live too.
+			return
 		}
+		s.values.Delete(m.value)
+		s.sum -= m.value
+		s.window.pop()
 	}
 }
