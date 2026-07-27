@@ -158,17 +158,32 @@ func TestAlertHandlerRejectsOversizedPayload(t *testing.T) {
 	}
 }
 
+const (
+	benchmarkRuleCount      = 1000
+	benchmarkLabelsPerAlert = 50
+)
+
 func benchmarkAlertPayload(b *testing.B, size int) []byte {
 	b.Helper()
 	alerts := make([]prometheusAlert, size)
 	for i := range alerts {
-		alerts[i].Labels = map[string]string{
+		labels := map[string]string{
 			"alertname": fmt.Sprintf("Alert%d", i),
 			"env":       []string{"prod", "staging"}[i%2],
 			"severity":  []string{"critical", "info"}[i%2],
 			"service":   fmt.Sprintf("service-%d", i),
 			"instance":  fmt.Sprintf("10.0.0.%d:9090", i),
+			"region":    fmt.Sprintf("r-%d", i%32),
+			"job":       "node",
+			"cluster":   "eu-west-1a",
 		}
+		for label := range benchmarkLabelsPerAlert - len(labels) {
+			labels[fmt.Sprintf("label_%02d", label)] = fmt.Sprintf("value_%02d", label)
+		}
+		if len(labels) != benchmarkLabelsPerAlert {
+			b.Fatalf("alert has %d labels, want %d", len(labels), benchmarkLabelsPerAlert)
+		}
+		alerts[i].Labels = labels
 	}
 	payload, err := json.Marshal(alerts)
 	if err != nil {
@@ -177,38 +192,65 @@ func benchmarkAlertPayload(b *testing.B, size int) []byte {
 	return payload
 }
 
+// benchmarkAlertRules builds exactly 1000 rules. Most use a selective service
+// or region equality index; the final two exercise rules that must always be
+// evaluated.
 func benchmarkAlertRules(b *testing.B) *labelmatch.RuleSet {
 	b.Helper()
-	rules, err := labelmatch.Compile([]labelmatch.Rule{
-		{
-			Matchers: []labelmatch.Matcher{
-				{Name: "env", Op: labelmatch.OpEqual, Value: "prod"},
-				{Name: "severity", Op: labelmatch.OpRegex, Value: "critical|warning"},
-			},
-			Write: map[string]string{"team": "sre", "page": "yes"},
-		},
-		{
-			Matchers: []labelmatch.Matcher{
-				{Name: "env", Op: labelmatch.OpEqual, Value: "staging"},
-				{Name: "severity", Op: labelmatch.OpNotEqual, Value: "critical"},
-			},
-			Write: map[string]string{"team": "triage"},
-		},
-		{
-			Matchers: []labelmatch.Matcher{
-				{Name: "service", Op: labelmatch.OpEqual, Value: "service-10"},
-			},
-			Write: map[string]string{"owner": "payments"},
-		},
-		{
-			Matchers: []labelmatch.Matcher{
-				{Name: "alertname", Op: labelmatch.OpRegex, Value: `Alert[0-9]+`},
-			},
-			Write: map[string]string{"source": "prometheus"},
-		},
-	})
+	input := make([]labelmatch.Rule, 0, benchmarkRuleCount)
+	for i := range benchmarkRuleCount {
+		switch {
+		case i == benchmarkRuleCount-2:
+			input = append(input, labelmatch.Rule{
+				Write: map[string]string{"pipeline": "v2"},
+			})
+		case i == benchmarkRuleCount-1:
+			input = append(input, labelmatch.Rule{
+				Matchers: []labelmatch.Matcher{
+					{Name: "severity", Op: labelmatch.OpRegex, Value: "crit.*"},
+				},
+				Write: map[string]string{"team": "oncall"},
+			})
+		case i%8 == 0:
+			input = append(input, labelmatch.Rule{
+				Matchers: []labelmatch.Matcher{
+					{Name: "service", Op: labelmatch.OpEqual, Value: fmt.Sprintf("service-%d", i)},
+					{Name: "env", Op: labelmatch.OpEqual, Value: "prod"},
+				},
+				Write: map[string]string{"team": fmt.Sprintf("team-%d", i%16)},
+			})
+		case i%8 == 1:
+			input = append(input, labelmatch.Rule{
+				Matchers: []labelmatch.Matcher{
+					{Name: "service", Op: labelmatch.OpEqual, Value: fmt.Sprintf("service-%d", i)},
+					{Name: "severity", Op: labelmatch.OpRegex, Value: "crit.*|warn.*"},
+				},
+				Write: map[string]string{"page": "yes"},
+			})
+		case i%8 == 2:
+			input = append(input, labelmatch.Rule{
+				Matchers: []labelmatch.Matcher{
+					{Name: "region", Op: labelmatch.OpEqual, Value: fmt.Sprintf("r-%d", i%32)},
+				},
+				Write: map[string]string{"zone": fmt.Sprintf("z-%d", i%32)},
+			})
+		default:
+			input = append(input, labelmatch.Rule{
+				Matchers: []labelmatch.Matcher{
+					{Name: "service", Op: labelmatch.OpEqual, Value: fmt.Sprintf("service-%d", i)},
+					{Name: "instance", Op: labelmatch.OpNotEqual, Value: ""},
+				},
+				Write: map[string]string{"owner": fmt.Sprintf("owner-%d", i%16)},
+			})
+		}
+	}
+
+	rules, err := labelmatch.Compile(input)
 	if err != nil {
 		b.Fatal(err)
+	}
+	if rules.Len() != benchmarkRuleCount {
+		b.Fatalf("compiled %d rules, want %d", rules.Len(), benchmarkRuleCount)
 	}
 	return rules
 }
@@ -257,11 +299,12 @@ func runAlertHandlerBenchmark(b *testing.B, handler http.Handler, payload []byte
 	}
 }
 
-// BenchmarkAlertHandler measures JSON decoding and matching for typical batch
-// sizes. The decode-only cases make the matching cost visible by subtraction;
-// rule compilation and HTTP test fixtures stay outside the timed loop. The
-// allocation delta also shows that applying precompiled writes does not
-// allocate per added label; allocations only appear when an input map grows.
+// BenchmarkAlertHandler measures JSON decoding and matching for batches of
+// 50-label alerts against 1000 rules. The decode-only cases make the matching
+// cost visible by subtraction; rule compilation and HTTP test fixtures stay
+// outside the timed loop. The allocation delta also shows that applying
+// precompiled writes does not allocate per added label; allocations only
+// appear when an input map grows.
 func BenchmarkAlertHandler(b *testing.B) {
 	rules := benchmarkAlertRules(b)
 	emptyRules, err := labelmatch.Compile(nil)
@@ -305,8 +348,10 @@ func runAlertHandlerParallelBenchmark(b *testing.B, handler http.Handler, payloa
 }
 
 // BenchmarkAlertHandlerParallel provides the same decode-only baseline while
-// exercising one RuleSet from concurrent requests. Each goroutine reuses its
-// HTTP fixtures, while each decoder owns the maps it passes to Apply.
+// exercising one RuleSet from concurrent requests. Parallelism is at the
+// request level: goroutines call ServeHTTP concurrently, while each handler
+// processes the alerts within its request sequentially. Each goroutine reuses
+// its HTTP fixtures, and each decoder owns the maps it passes to Apply.
 func BenchmarkAlertHandlerParallel(b *testing.B) {
 	rules := benchmarkAlertRules(b)
 	emptyRules, err := labelmatch.Compile(nil)
