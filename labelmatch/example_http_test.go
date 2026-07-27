@@ -3,14 +3,137 @@ package labelmatch_test
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/pliu/go-utils/labelmatch"
 )
+
+// prometheusAlert contains the part of a Prometheus alert used by this
+// handler. Fields such as annotations and startsAt can be added as needed;
+// unknown fields in the request are ignored by encoding/json.
+type prometheusAlert struct {
+	Labels map[string]string `json:"labels"`
+}
+
+// maxAlertBytes limits bytes on the wire. Decoded maps occupy more memory, so
+// production handlers should choose this limit for their expected alert shape
+// and maximum number of concurrent requests.
+const maxAlertBytes = 1 << 20 // 1 MiB
+
+// newAlertHandler builds a handler around a RuleSet compiled at startup.
+// Decoding labels directly into map[string]string lets Apply enrich the
+// request in place, without converting or copying each label set.
+func newAlertHandler(rules *labelmatch.RuleSet, consume func([]prometheusAlert)) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, maxAlertBytes)
+		dec := json.NewDecoder(r.Body)
+
+		var alerts []prometheusAlert
+		if err := dec.Decode(&alerts); err != nil {
+			writeAlertDecodeError(w, err)
+			return
+		}
+		// Decode must consume the entire body. Decoder.More is insufficient
+		// here because a stray trailing ']' or '}' makes More report false.
+		if err := dec.Decode(&struct{}{}); err != io.EOF {
+			writeAlertDecodeError(w, err)
+			return
+		}
+
+		for i := range alerts {
+			rules.Apply(alerts[i].Labels)
+		}
+		consume(alerts)
+		w.WriteHeader(http.StatusNoContent)
+	})
+}
+
+func writeAlertDecodeError(w http.ResponseWriter, err error) {
+	var maxBytesError *http.MaxBytesError
+	if errors.As(err, &maxBytesError) {
+		http.Error(w, "alerts payload too large", http.StatusRequestEntityTooLarge)
+		return
+	}
+	http.Error(w, "invalid alerts payload", http.StatusBadRequest)
+}
+
+// Prometheus sends Alertmanager a JSON list whose alerts contain a labels
+// object. A handler can decode that object into the map type Apply expects and
+// reuse one concurrency-safe RuleSet for every request.
+func Example_alertHandler() {
+	rules, err := labelmatch.Compile([]labelmatch.Rule{{
+		Matchers: []labelmatch.Matcher{
+			{Name: "env", Op: labelmatch.OpEqual, Value: "prod"},
+			{Name: "severity", Op: labelmatch.OpRegex, Value: "critical|warning"},
+		},
+		Write: map[string]string{"team": "sre", "page": "yes"},
+	}})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	handler := newAlertHandler(rules, func(alerts []prometheusAlert) {
+		// Forward, store, or otherwise process the enriched alerts here.
+		for _, alert := range alerts {
+			fmt.Printf("%s: team=%q page=%q\n",
+				alert.Labels["alertname"], alert.Labels["team"], alert.Labels["page"])
+		}
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v2/alerts", bytes.NewBufferString(`[
+		{"labels":{"alertname":"HighErrorRate","env":"prod","severity":"critical"}},
+		{"labels":{"alertname":"QueueBacklog","env":"staging","severity":"warning"}}
+	]`))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	fmt.Println("status:", rec.Code)
+
+	// Output:
+	// HighErrorRate: team="sre" page="yes"
+	// QueueBacklog: team="" page=""
+	// status: 204
+}
+
+func TestAlertHandlerRejectsInvalidPayload(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "malformed", body: `{`},
+		{name: "trailing data", body: `[{"labels":{"a":"b"}}] trailing`},
+		{name: "trailing delimiter", body: `[{"labels":{"a":"b"}}]]`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rules, err := labelmatch.Compile(nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			consumed := false
+			handler := newAlertHandler(rules, func([]prometheusAlert) {
+				consumed = true
+			})
+			req := httptest.NewRequest(http.MethodPost, "/api/v2/alerts",
+				bytes.NewBufferString(tc.body))
+			rec := httptest.NewRecorder()
+
+			handler.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+			}
+			if consumed {
+				t.Error("invalid payload was consumed")
+			}
+		})
+	}
+}
 
 func TestAlertHandlerRejectsOversizedPayload(t *testing.T) {
 	rules, err := labelmatch.Compile(nil)
@@ -118,11 +241,14 @@ func runAlertHandlerBenchmark(b *testing.B, handler http.Handler, payload []byte
 	b.Helper()
 	req := httptest.NewRequest(http.MethodPost, "/api/v2/alerts", nil)
 	w := newBenchmarkResponseWriter()
+	body := bytes.NewReader(nil)
+	rc := io.NopCloser(body)
 
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		req.Body = io.NopCloser(bytes.NewReader(payload))
+		body.Reset(payload)
+		req.Body = rc
 		w.status = 0
 		handler.ServeHTTP(w, req)
 		if w.status != http.StatusNoContent {
@@ -133,7 +259,9 @@ func runAlertHandlerBenchmark(b *testing.B, handler http.Handler, payload []byte
 
 // BenchmarkAlertHandler measures JSON decoding and matching for typical batch
 // sizes. The decode-only cases make the matching cost visible by subtraction;
-// rule compilation and HTTP test fixtures stay outside the timed loop.
+// rule compilation and HTTP test fixtures stay outside the timed loop. The
+// allocation delta also shows that applying precompiled writes does not
+// allocate per added label; allocations only appear when an input map grows.
 func BenchmarkAlertHandler(b *testing.B) {
 	rules := benchmarkAlertRules(b)
 	emptyRules, err := labelmatch.Compile(nil)
@@ -156,25 +284,43 @@ func BenchmarkAlertHandler(b *testing.B) {
 	}
 }
 
-// BenchmarkAlertHandlerParallel exercises the same RuleSet from concurrent
-// requests; each goroutine reuses its request and response writer, while each
-// decoder owns the maps that its request passes to Apply.
-func BenchmarkAlertHandlerParallel(b *testing.B) {
-	handler := newAlertHandler(benchmarkAlertRules(b), func([]prometheusAlert) {})
-	payload := benchmarkAlertPayload(b, 100)
-
+func runAlertHandlerParallelBenchmark(b *testing.B, handler http.Handler, payload []byte) {
+	b.Helper()
 	b.ReportAllocs()
-	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		req := httptest.NewRequest(http.MethodPost, "/api/v2/alerts", nil)
 		w := newBenchmarkResponseWriter()
+		body := bytes.NewReader(nil)
+		rc := io.NopCloser(body)
 		for pb.Next() {
-			req.Body = io.NopCloser(bytes.NewReader(payload))
+			body.Reset(payload)
+			req.Body = rc
 			w.status = 0
 			handler.ServeHTTP(w, req)
 			if w.status != http.StatusNoContent {
 				b.Errorf("status = %d", w.status)
 			}
 		}
+	})
+}
+
+// BenchmarkAlertHandlerParallel provides the same decode-only baseline while
+// exercising one RuleSet from concurrent requests. Each goroutine reuses its
+// HTTP fixtures, while each decoder owns the maps it passes to Apply.
+func BenchmarkAlertHandlerParallel(b *testing.B) {
+	rules := benchmarkAlertRules(b)
+	emptyRules, err := labelmatch.Compile(nil)
+	if err != nil {
+		b.Fatal(err)
+	}
+	payload := benchmarkAlertPayload(b, 100)
+
+	b.Run("decode-only", func(b *testing.B) {
+		handler := newAlertHandler(emptyRules, func([]prometheusAlert) {})
+		runAlertHandlerParallelBenchmark(b, handler, payload)
+	})
+	b.Run("decode-and-match", func(b *testing.B) {
+		handler := newAlertHandler(rules, func([]prometheusAlert) {})
+		runAlertHandlerParallelBenchmark(b, handler, payload)
 	})
 }

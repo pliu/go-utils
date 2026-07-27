@@ -1,13 +1,8 @@
 package labelmatch_test
 
 import (
-	"bytes"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"time"
@@ -15,77 +10,6 @@ import (
 	"github.com/pliu/go-utils/configmanager"
 	"github.com/pliu/go-utils/labelmatch"
 )
-
-// prometheusAlert contains the part of a Prometheus alert used by this
-// handler. Fields such as annotations and startsAt can be added as needed;
-// unknown fields in the request are ignored by encoding/json.
-type prometheusAlert struct {
-	Labels map[string]string `json:"labels"`
-}
-
-const maxAlertBytes = 1 << 20 // 1 MiB
-
-// newAlertHandler builds a handler around a RuleSet compiled at startup.
-// Decoding labels directly into map[string]string lets Apply enrich the
-// request in place, without converting or copying each label set.
-func newAlertHandler(rules *labelmatch.RuleSet, consume func([]prometheusAlert)) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		r.Body = http.MaxBytesReader(w, r.Body, maxAlertBytes)
-		var alerts []prometheusAlert
-		if err := json.NewDecoder(r.Body).Decode(&alerts); err != nil {
-			var maxBytesError *http.MaxBytesError
-			if errors.As(err, &maxBytesError) {
-				http.Error(w, "alerts payload too large", http.StatusRequestEntityTooLarge)
-				return
-			}
-			http.Error(w, "invalid alerts payload", http.StatusBadRequest)
-			return
-		}
-
-		for i := range alerts {
-			rules.Apply(alerts[i].Labels)
-		}
-		consume(alerts)
-		w.WriteHeader(http.StatusNoContent)
-	})
-}
-
-// Prometheus sends Alertmanager a JSON list whose alerts contain a labels
-// object. A handler can decode that object into the map type Apply expects and
-// reuse one concurrency-safe RuleSet for every request.
-func Example_alertHandler() {
-	rules, err := labelmatch.Compile([]labelmatch.Rule{{
-		Matchers: []labelmatch.Matcher{
-			{Name: "env", Op: labelmatch.OpEqual, Value: "prod"},
-			{Name: "severity", Op: labelmatch.OpRegex, Value: "critical|warning"},
-		},
-		Write: map[string]string{"team": "sre", "page": "yes"},
-	}})
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	handler := newAlertHandler(rules, func(alerts []prometheusAlert) {
-		// Forward, store, or otherwise process the enriched alerts here.
-		for _, alert := range alerts {
-			fmt.Printf("%s: team=%q page=%q\n",
-				alert.Labels["alertname"], alert.Labels["team"], alert.Labels["page"])
-		}
-	})
-
-	req := httptest.NewRequest(http.MethodPost, "/api/v2/alerts", bytes.NewBufferString(`[
-		{"labels":{"alertname":"HighErrorRate","env":"prod","severity":"critical"}},
-		{"labels":{"alertname":"QueueBacklog","env":"staging","severity":"warning"}}
-	]`))
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	fmt.Println("status:", rec.Code)
-
-	// Output:
-	// HighErrorRate: team="sre" page="yes"
-	// QueueBacklog: team="" page=""
-	// status: 204
-}
 
 // ruleConfig is a config file holding a rule set. Compiling inside Validate,
 // which configmanager runs on the decoded instance before promoting it,
