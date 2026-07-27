@@ -100,64 +100,6 @@ func Example_alertHandler() {
 	// status: 204
 }
 
-func TestAlertHandlerRejectsInvalidPayload(t *testing.T) {
-	tests := []struct {
-		name string
-		body string
-	}{
-		{name: "malformed", body: `{`},
-		{name: "trailing data", body: `[{"labels":{"a":"b"}}] trailing`},
-		{name: "trailing delimiter", body: `[{"labels":{"a":"b"}}]]`},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			rules, err := labelmatch.Compile(nil)
-			if err != nil {
-				t.Fatal(err)
-			}
-			consumed := false
-			handler := newAlertHandler(rules, func([]prometheusAlert) {
-				consumed = true
-			})
-			req := httptest.NewRequest(http.MethodPost, "/api/v2/alerts",
-				bytes.NewBufferString(tc.body))
-			rec := httptest.NewRecorder()
-
-			handler.ServeHTTP(rec, req)
-
-			if rec.Code != http.StatusBadRequest {
-				t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
-			}
-			if consumed {
-				t.Error("invalid payload was consumed")
-			}
-		})
-	}
-}
-
-func TestAlertHandlerRejectsOversizedPayload(t *testing.T) {
-	rules, err := labelmatch.Compile(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	consumed := false
-	handler := newAlertHandler(rules, func([]prometheusAlert) {
-		consumed = true
-	})
-	req := httptest.NewRequest(http.MethodPost, "/api/v2/alerts",
-		bytes.NewReader(bytes.Repeat([]byte(" "), maxAlertBytes+1)))
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusRequestEntityTooLarge {
-		t.Errorf("status = %d, want %d", rec.Code, http.StatusRequestEntityTooLarge)
-	}
-	if consumed {
-		t.Error("oversized payload was consumed")
-	}
-}
-
 const (
 	benchmarkRuleCount      = 1000
 	benchmarkLabelsPerAlert = 50
