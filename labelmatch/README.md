@@ -34,6 +34,9 @@ changed := rs.Apply(labels)
 // labels: env=prod severity=critical job=postgres team="dba sre" page=yes
 ```
 
+See `Example_alertHandler` for a complete HTTP handler that processes bounded
+batches in Prometheus's Alertmanager request format.
+
 ## Matching
 
 | Operator | Constant | Meaning |
